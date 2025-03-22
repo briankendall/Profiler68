@@ -1,0 +1,107 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+        {
+            "label": "Run application in Mini vMac",
+            "type": "shell",
+            "command": "${workspaceFolder}/TestPerf/scripts/run-app-in-minivmac.sh",
+            "args": [
+                "${command:cmake.buildDirectory}"
+            ],
+            "dependsOn": [
+                "CMake: Build Application"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "type": "cmake",
+            "label": "CMake: Build Application",
+            "command": "build",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": false,
+                "reveal": "always",
+                "focus": false,
+                "close": false,
+                "panel": "shared",
+                "revealProblems": "onProblem",
+                "showReuseMessage": false,
+                "clear": true
+            },
+            "targets": [
+                "all"
+            ],
+            "detail": "CMake build task",
+            "problemMatcher": [
+                {
+                    "owner": "cpp",
+                    "fileLocation": "absolute",
+                    "pattern": [
+                        {
+                            "regexp": "^(.*):(\\d+):(\\d+): (?:fatal )?(error|warning): (.*)$",
+                            "file": 1,
+                            "line": 2,
+                            "column": 3,
+                            "severity": 4,
+                            "message": 5
+                        },
+                        {
+                            "regexp": "^(?!(?:\\d+.+ generated\\.)|In file)(?!\\/)(.+)$",
+                            "message": 1,
+                            "loop": true
+                        }
+                    ]
+                },
+                {
+                    "owner": "linker0",
+                    "severity": "error",
+                    "pattern": {
+                        "regexp": "((error): ld returned (-?\\d+) exit status)",
+                        "message": 1,
+                        "file": 2
+                    }
+                },
+                {
+                    "owner": "linker1",
+                    "severity": "error",
+                    "pattern": {
+                        "regexp": "(\\S*\\..{0,2}):(.*?):\\s(undefined reference to `\\S*')",
+                        "file": 1,
+                        "line": 2,
+                        "message": 3
+                    }
+                },
+                {
+                    "owner": "linker2",
+                    "severity": "error",
+                    "pattern": {
+                        "regexp": "((.*\\..{0,2}):(.*?): (multiple definition of .+);.+:(.*\\..{0,2}):(\\d+): first defined here)",
+                        "message": 4,
+                        "file": 5,
+                        "line": 3
+                    }
+                },
+                {
+                    "owner": "linker3",
+                    "severity": "error",
+                    "pattern": {
+                        "regexp": "((cannot open linker script file (.+.ld): No such file or directory))",
+                        "message": 1,
+                        "file": 3
+                    }
+                },
+                {
+                    "owner": "linker4",
+                    "severity": "error",
+                    "pattern": {
+                        "regexp": "((region `\\S+' overflowed by \\d+ bytes))",
+                        "message": 1
+                    }
+                }
+            ]
+        }
+    ]
+}

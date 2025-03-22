@@ -1,0 +1,36 @@
+{
+    "files.exclude": {
+        ".vscode": false,
+        "**/__pycache__": true,
+        "**/.git": true,
+        "**/.svn": true,
+        "**/.hg": true,
+        "**/CVS": true,
+        "**/.DS_Store": true,
+        "**/Thumbs.db": true,
+        "**/CMakeFiles": true,
+        "**/build": true,
+        "CMakeCache.txt": true,
+        "minivmac/src": true,
+        "minivmac/cfg": true,
+        "minivmac/DerivedData": true,
+        "minivmac/disks": true,
+        "minivmac/extras": true,
+        "minivmac/setup": true,
+        "minivmac/.gitignore": true,
+        "minivmac/setup_t": true,
+        "minivmac/setup.sh": true,
+        "minivmac/*.xcodeproj": true,
+        "minivmac/*.txt": true,
+        "minivmac/*.rom": true,
+        "minivmac/*.ROM": true,
+        "minivmac/*.dsk": true,
+        "minivmac/signals": true,
+        "ROM Maps/**": true,
+    },
+    "cmake.sourceDirectory": "${workspaceFolder}/TestPerf",
+    "C_Cpp.default.intelliSenseMode": "linux-gcc-x86",
+    "cmake.configureArgs": [
+        "-DCMAKE_VERBOSE_MAKEFILE=OFF"
+    ]
+}

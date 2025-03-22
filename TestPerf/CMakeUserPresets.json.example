@@ -1,0 +1,21 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 20,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "Macintosh",
+            "hidden": false,
+            "generator": "Unix Makefiles",
+            "binaryDir": "${sourceDir}/build",
+            "toolchainFile": "/path/to/retro68-build/toolchain/m68k-apple-macos/cmake/retro68.toolchain.cmake",
+            "cacheVariables": {
+                "MACINTOSH_FTP_STAGING_PATH": "/Users/username/ftp/macintosh",
+                "MACINTOSH_LOGGING_LOCAL_IP": "auto"
+            }
+        }
+    ]
+}

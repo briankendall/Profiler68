@@ -1,0 +1,9 @@
+CMakeCache.txt
+CMakeFiles/**
+build
+.DS_Store
+_untracked
+DerivedData
+null.d
+__pycache__
+*.dylib
