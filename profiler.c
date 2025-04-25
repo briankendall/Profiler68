@@ -75,7 +75,7 @@ void ProfilerTimerFunction(UInt8 *stackPointer)
     
     if (returnAddr0 >= profilerAppHeapStart) {
         *(UInt32 *)(currentSample + 1) = returnAddr0;
-        ProfilerStackCrawl((UInt32 *)(currentSample + 3), &count, (UInt32 *)(sampleData + sampleDataSizeWords), &errorCode);
+        ProfilerStackCrawl((UInt32 *)(currentSample + 3), &count, (UInt32 *)(sampleData + sampleDataSizeWords - 1), &errorCode);
     } else {
         errorCode = 3;
     }
