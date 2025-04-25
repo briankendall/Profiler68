@@ -9,6 +9,7 @@ from subprocess import check_output
 import json
 from dataclasses import dataclass
 import argparse
+import json
 
 addr2linePath = "/opt/local/bin/llvm-addr2line-mp-19"
 functionNameMaxChars = 32
@@ -30,6 +31,7 @@ class FunctionSample:
     symbol: str = ""
     line: str = ""
     file: str = ""
+    filePath: str = ""
     source: str = ""
 
 CodeSegment = namedtuple("CodeSegment", ["startAddr", "endAddr", "offset"])
@@ -43,6 +45,7 @@ romMap = None
 inclusiveTally = {}
 exclusiveTally = {}
 functionSamples = {}
+samplesOutPath = None
 
 
 def readInt(f, size):
@@ -204,6 +207,7 @@ def addSampleToFunction(sample, symbol):
         s = FunctionSample()
         s.line = addrData.line
         s.file = os.path.basename(addrData.file)[:filenameMaxChars]
+        s.filePath = addrData.file
         s.symbol = symbol
         s.source = addrData.source
         functionSamples[symbol][key] = s
@@ -290,6 +294,9 @@ def process(profilePath, binaryPath):
     countSamples()
     
     printResults()
+    
+    if samplesOutPath is not None:
+        writeSamplesAsJSON()
 
 
 def printResults():
@@ -357,6 +364,28 @@ def printResults():
             print(f"{spaces}{sampleSymbol}")
 
 
+def writeSamplesAsJSON():
+    fileAndLineData = {}
+    
+    for symbol, lineDict in functionSamples.items():
+        funcSamples = sorted(lineDict.values(), key=lambda x: x.line)
+        totalSampleCount = sum([funcSample.count for funcSample in funcSamples])
+        
+        if totalSampleCount == 0:
+            continue
+        
+        for funcSample in funcSamples:
+            if funcSample.filePath not in fileAndLineData:
+                fileAndLineData[funcSample.filePath] = {}
+            
+            percent = (funcSample.count * 10000 // totalSampleCount) / 100.0
+            
+            fileAndLineData[funcSample.filePath][funcSample.line] = {"count": funcSample.count, "percent": percent}        
+
+    with open(samplesOutPath, "w") as f:
+        f.write(json.dumps(fileAndLineData))
+        
+
 def parseArgs():
     parser = argparse.ArgumentParser(description="Profile parsing arguments")
     parser.add_argument("profile_path", help="Path to profile")
@@ -374,11 +403,14 @@ def parseArgs():
                         type=int,
                         default=filenameMaxChars,
                         help=f"Maximum number of characters in filenames (default: {filenameMaxChars})")
+    parser.add_argument("--samples-path",
+                        default=None,
+                        help=f"Also write out samples as a json file")
     return parser.parse_args()
 
 
 def main():
-    global romMapsDir, addr2linePath, functionNameMaxChars, filenameMaxChars
+    global romMapsDir, addr2linePath, functionNameMaxChars, filenameMaxChars, samplesOutPath
     
     args = parseArgs()
     addr2linePath = args.addr2line
@@ -389,6 +421,11 @@ def main():
     
     if args.rom_maps_dir:
         romMapsDir = args.rom_maps_dir
+    
+    if args.samples_path:
+        samplesOutPath = args.samples_path
+    
+    
     
     process(profilePath, binaryPath)
 
