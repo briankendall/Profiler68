@@ -10,9 +10,11 @@ It includes a sample project, adapted from TestPerf from MPW 3.5, that demonstra
 
 ### Usage notes:
 
-- Requires `llvm-addr2line`. `analyze.py` has an argument you can use to specify its path. (This requirement may be removed in a later version!)
-- Currently this doesn't support multi-segment apps, so you need to compile your app with `-Wl,--mac-single`.
-- This also currently requires compiling _without_ `-Wl,-gc-sections`, as it prevents debugging information from being usable. This may cause your application to fail to run, though, depending on your system. I'm trying to work out a way to remove this requirement.
+There are a number of compiler flags you need to use for profiler builds:
+
+- `-Wl,--mac-single`: Currently this doesn't support multi-segment apps. (Hopefully will be fixed at some point in the future.)
+- `-g -gdwarf-4`: Enables debugging, so that the profiler's samples can be symbolicated.    
+- `-ffixed-a6`: This prevents the compiler from using the A6 register. This isn't strictly necessary, but not using this may result in the compiled code overwriting A6, which would prevent the profiler from being able to do a stack crawl while taking samples, producing bunk results.
 
 #### Sample output
 Here's what the output looks like when profiling TestPerf:
