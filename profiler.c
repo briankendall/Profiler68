@@ -170,7 +170,6 @@ OSErr InitProfiler(int sizeWords, long samplesPerSecond)
     // called the function that called InitProfiler.
     asm volatile (
         "move.l %%a6, %%a0 \n"
-        "move.l (%%a0), %%a0 \n"
         "move.l 4(%%a0), %0 \n"
         : "=d" (profilerStackCrawlStopAddr)
         :
