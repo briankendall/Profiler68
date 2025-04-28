@@ -10,8 +10,10 @@ import json
 from dataclasses import dataclass
 import argparse
 import json
+import re
 
-addr2linePath = "/opt/local/bin/llvm-addr2line-mp-19"
+llvmSymbolizer = None
+readelfPath = None
 functionNameMaxChars = 32
 filenameMaxChars = 14
 romMapsDir = os.path.join(os.path.dirname(__file__), "ROM Maps")
@@ -110,14 +112,17 @@ def readMPWROMMap(model):
     romMap = (result, sorted(result.keys()))
 
 
-def findROMSymbol(romMap, addr):
-    sortedKeys = romMap[1]
-    idx = bisect.bisect_right(sortedKeys, addr) - 1
+def findKeyEqualToOrLessThan(m, sortedKeys, k):
+    idx = bisect.bisect_right(sortedKeys, k) - 1
     
     if idx >= 0:
-        return romMap[0][sortedKeys[idx]]
+        return m[sortedKeys[idx]]
     
     return None
+
+
+def findROMSymbol(romMap, addr):
+    return findKeyEqualToOrLessThan(romMap[0], romMap[1], addr)
 
 
 def findCodeSegmentForGlobalAddr(globalAddr):
@@ -158,13 +163,13 @@ def processSampleGlobalAddr(globalAddr):
     return True
 
 
-def determineFileAndLineNumbers(binaryPath, addrsToProcess):
+def determineFileAndLineNumbersUsingLLVM(binaryPath, addrsToProcess):
     localAddrs = [hex(allAddrData[globalAddr].addr) for globalAddr in addrsToProcess]
     
     if not os.path.exists(binaryPath):
         raise Exception(f"Can't find binary: {binaryPath}")
     
-    jsonData = check_output([addr2linePath, "--output-style=JSON", "--print-source-context-lines=1",
+    jsonData = check_output([llvmSymbolizer, "--output-style=JSON", "--print-source-context-lines=1",
                              "-f", "-e", binaryPath] + localAddrs)
     processedAddrs = json.loads(jsonData)
     
@@ -178,7 +183,8 @@ def determineFileAndLineNumbers(binaryPath, addrsToProcess):
             raise Exception(f"Code offset {localAddrs[i]} has no associated symbol")
         
         if len(processedAddrs[i]["Symbol"]) > 1:
-            raise Exception(f"Code offset {localAddrs[i]} has more than one associated symbol")
+            raise Exception(f"Code offset {localAddrs[i]} has more than one associated symbol. "
+                            "Note: linking with -Wl,-gc-sections will cause this to happen.")
         
         data = processedAddrs[i]["Symbol"][0]
         addrData = allAddrData[globalAddr]
@@ -190,10 +196,164 @@ def determineFileAndLineNumbers(binaryPath, addrsToProcess):
             addrData.source = data["Source"]
 
 
+def getSymbols(binaryPath):
+    data = check_output([readelfPath, "--wide", "--symbols", binaryPath])
+    symbolData = data.decode('utf-8')
+    
+    lines = symbolData.split('\n')
+    symbolsByAddr = {}
+    
+    for line in lines:
+        match = re.match(r'^\s+\d+:\s+([0-9A-Fa-f]+)\s+\d+\s+(\w+)\s+\w+\s+\w+\s+\w+\s+(.+)$', line)
+        
+        if match is None:
+            continue
+        
+        addr = int(match.group(1), 16)
+        
+        if addr == 0:
+            continue
+        
+        if addr not in symbolsByAddr:
+            symbolsByAddr[addr] = {}
+        
+        type = match.group(2)
+        
+        if type not in symbolsByAddr[addr]:
+            symbolsByAddr[addr][type] = []
+        
+        symbolsByAddr[addr][type].append(match.group(3))
+        
+        if type == "FUNC" and len(symbolsByAddr[addr][type]) > 1:
+            raise Exception(f"readelf --symbols reports more than one function at same address?! addr: {addr}")
+    
+    return symbolsByAddr
+
+
+def getAddrToLineEntries(binaryPath):
+    symbols = getSymbols(binaryPath)
+    
+    data = check_output([readelfPath, "--wide", "--debug-dump=decodedline", binaryPath])
+    lineData = data.decode('utf-8')
+    lines = lineData.split('\n')
+    filenamesToPath = {}
+    addrsData = {}
+    
+    currentCU = None
+    currentFile = None
+    startingBlock = True
+    invalidBlock = False
+    currentFunc = None
+    
+    for i, line in enumerate(lines):
+        # Is the line specifying a code unit with a file?
+        match = re.match(r"^CU: (.*):$", line)
+        
+        if match is not None:
+            currentCU = match.group(1)
+            startingBlock = True
+            filenamesToPath[os.path.basename(match.group(1))] = match.group(1)
+            continue
+        
+        # Is it specifying another file within a code unit?
+        match = re.match(r"^(/.*):$", line)
+        
+        if match is not None:
+            currentFile = match.group(1)
+            filenamesToPath[os.path.basename(match.group(1))] = match.group(1)
+            continue
+        
+        # Is it an entry specifying an address / line number association?
+        match = re.match(r"^(.+?)\s+(\d+|-)\s+(?:0x)?([0-9a-fA-F]+)\s*(?:\s+\d+)?(?:\s+x)?$", line)
+        
+        if match is None:
+            continue
+        
+        filename = match.group(1)
+        addr = int(match.group(3), 16)
+        
+        if match.group(2) == "-":
+            # End of code block / function
+            startingBlock = True
+            
+            if not invalidBlock:
+                addrsData[addr] = [filename, None, None]
+            
+            continue
+        
+        lineNumber = int(match.group(2))
+        
+        if startingBlock:
+            # Starting a code block
+            # If its address is 0, then we know it was removed due to linker garbage collection
+            startingBlock = False
+            invalidBlock = (addr == 0)
+            
+            if invalidBlock:
+                currentFunc = None
+            else:
+                if addr not in symbols:
+                    raise Exception(f"Started block with address not listed in symbol table?? addr: {addr}")
+                
+                currentFunc = symbols[addr]["FUNC"][0] if "FUNC" in symbols[addr] else None
+        
+        if invalidBlock:
+            continue
+        
+        addrsData[addr] = [filename, lineNumber, currentFunc]
+    
+    # Convert filenames to full paths now that we know them all:
+    for addrData in addrsData.values():
+        addrData[0] = filenamesToPath[addrData[0]]
+    
+    return addrsData
+
+
+def determineFileAndLineNumbersUsingReadelf(binaryPath, addrsToProcess):
+    def getSourceLine(path, lineNumber):
+        if path not in sourceData:
+            if not os.path.exists(path):
+                sourceData[path] = []
+            else:
+                with open(path, "r") as f:
+                    sourceData[path] = f.readlines()
+    
+        lines = sourceData[path]
+        
+        if lineNumber > len(lines):
+            return ""
+        else:
+            return lines[lineNumber-1]
+    
+    addrsData = getAddrToLineEntries(binaryPath)
+    
+    addrsDataSortedKeys = sorted(addrsData.keys())
+    unknownSymbolCount = 0
+    sourceData = {}
+    
+    for i in range(len(addrsToProcess)):
+        globalAddr = addrsToProcess[i]
+        addrData = allAddrData[globalAddr]
+        data = findKeyEqualToOrLessThan(addrsData, addrsDataSortedKeys, addrData.addr)
+        
+        if data is None:
+            unknownSymbolCount += 1
+            data = ("NOFILE", 0, f"UNKNOWN_SYMBOL_{unknownSymbolCount}")
+        
+        addrData.file = data[0]
+        addrData.line = data[1]
+        addrData.symbol = data[2]
+        
+        if addrData.file is not None and addrData.line is not None:
+            addrData.source = f"{addrData.line} >: " + getSourceLine(addrData.file, addrData.line)
+        else:
+            addrData.source = None
+
+
 def addSampleToFunction(sample, symbol):
     addrData = allAddrData[sample]
     
-    if addrData.type == 'trap' or addrData.file is None or addrData.line is None or addrData.source is None:
+    if addrData.type == 'trap' or addrData.file is None or addrData.line is None:
         return
     
     if symbol not in functionSamples:
@@ -215,12 +375,17 @@ def addSampleToFunction(sample, symbol):
 
 def countSamples():
     for sample in samples:
+        addrData = allAddrData[sample[0]]
         symbol = allAddrData[sample[0]].symbol
         exclusiveTally[symbol] = exclusiveTally.get(symbol, 0) + 1
         addSampleToFunction(sample[0], symbol)
         
         for stackItem in sample:
             symbol = allAddrData[stackItem].symbol
+            
+            if symbol is None:
+                continue
+            
             inclusiveTally[symbol] = inclusiveTally.get(symbol, 0) + 1
             addSampleToFunction(stackItem, symbol)
 
@@ -263,6 +428,11 @@ def readProfile(profilePath):
     
     return rawSamples
 
+
+def sampleHasValidSymbols(sample):
+    return all(map(lambda addr: allAddrData[addr].symbol is not None, sample))
+
+
 def process(profilePath, binaryPath):
     global allAddrData, samples
 
@@ -286,11 +456,18 @@ def process(profilePath, binaryPath):
 
     addrsToProcess = [key for key, val in allAddrData.items() if val.type == 'func']
 
-    print("Total samples: ", len(samples))
-    print("Unusable samples: ", ignoredSamples)
+    print("Total samples: ", len(rawSamples))
     print("")
     
-    determineFileAndLineNumbers(binaryPath, addrsToProcess)
+    if llvmSymbolizer is not None:
+        determineFileAndLineNumbersUsingLLVM(binaryPath, addrsToProcess)
+    else:
+        determineFileAndLineNumbersUsingReadelf(binaryPath, addrsToProcess)
+    
+    samples = list(filter(sampleHasValidSymbols, samples))
+    print("Usable samples: ", len(samples))
+    print("Unusable samples: ", len(rawSamples) - len(samples))
+    
     countSamples()
     
     printResults()
@@ -387,33 +564,68 @@ def writeSamplesAsJSON():
         
 
 def parseArgs():
-    parser = argparse.ArgumentParser(description="Profile parsing arguments")
+    defaultLLVMSymbolizerPath = "/opt/local/bin/llvm-symbolizer-mp-19"
+    llvmSymbolizerPath = None
+    
+    # Bending over backwards a bit to do this custom bit of behavior with --llvm-symbolizer:
+    class CustomHelpFormatter(argparse.HelpFormatter):
+        def _format_action_invocation(self, action):
+            if len(action.option_strings) != 1 or action.option_strings[0] != '--llvm-symbolizer':
+                return super()._format_action_invocation(action)
+            
+            return '--llvm-symbolizer[=PATH]'
+    
+    for i, arg in enumerate(sys.argv[:]):
+        if arg.startswith("--llvm-symbolizer="):
+            llvmSymbolizerPath = arg[len("--llvm-symbolizer="):]
+            del sys.argv[i]
+    
+    parser = argparse.ArgumentParser(formatter_class=CustomHelpFormatter)
     parser.add_argument("profile_path", help="Path to profile")
     parser.add_argument("binary_path", help="Path to ELF formatted binary (e.g. Project.code.bin.gdb)")
-    parser.add_argument("-r", "--rom-maps-dir",
+    parser.add_argument("-r", "--rom-maps-dir", metavar="PATH",
                         help="Path to ROM maps directory (default: same directory as this script)")
-    parser.add_argument("-a", "--addr2line",
-                        default=addr2linePath,
-                        help=f"Path to llvm-addr2line (default: {addr2linePath})")
+    parser.add_argument("-t", "--retro68-toolchain",  metavar="PATH",
+                        help="Specify the path to Retro68's toolchain directory. "
+                        "(Not required when using --llvm-symbolizer)")
+    parser.add_argument("--llvm-symbolizer", action="store_true",
+                        help=f"Use llvm-symbolizer for symbolication instead of Retro68's elftools, and optionally "
+                        f"specify the path to llvm-symbolizer (defaulting to {defaultLLVMSymbolizerPath})")
     parser.add_argument("--function-max-chars",
-                        type=int,
+                        type=int, metavar="COUNT",
                         default=functionNameMaxChars,
                         help=f"Maximum number of characters in function names (default: {functionNameMaxChars})")
     parser.add_argument("--filename-max-chars",
-                        type=int,
+                        type=int, metavar="COUNT",
                         default=filenameMaxChars,
                         help=f"Maximum number of characters in filenames (default: {filenameMaxChars})")
     parser.add_argument("--samples-path",
-                        default=None,
-                        help=f"Also write out samples as a json file")
-    return parser.parse_args()
+                        default=None, metavar="PATH",
+                        help=f"Write out samples as a json file")
+    args = parser.parse_args()
+    
+    if args.llvm_symbolizer == True or llvmSymbolizerPath is not None:
+        args.llvm_symbolizer = llvmSymbolizerPath or defaultLLVMSymbolizerPath
+    else:
+        args.llvm_symbolizer = None
+    
+    return args
 
 
 def main():
-    global romMapsDir, addr2linePath, functionNameMaxChars, filenameMaxChars, samplesOutPath
+    global romMapsDir, llvmSymbolizer, readelfPath, functionNameMaxChars, filenameMaxChars, samplesOutPath
     
     args = parseArgs()
-    addr2linePath = args.addr2line
+    
+    llvmSymbolizer = args.llvm_symbolizer
+    
+    if llvmSymbolizer is None and args.retro68_toolchain is None:
+        sys.stderr.write("Error: need to specify either --retro68-toolchain or --llvm-symbolizer\n")
+        sys.exit(1)
+    
+    if args.retro68_toolchain is not None:
+        readelfPath = os.path.join(args.retro68_toolchain, "bin", "m68k-apple-macos-readelf")
+    
     functionNameMaxChars = args.function_max_chars
     filenameMaxChars = args.filename_max_chars
     profilePath = args.profile_path
@@ -424,8 +636,6 @@ def main():
     
     if args.samples_path:
         samplesOutPath = args.samples_path
-    
-    
     
     process(profilePath, binaryPath)
 
