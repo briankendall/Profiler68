@@ -4,7 +4,6 @@ import sys
 import os
 from pprint import pprint
 import bisect
-from collections import namedtuple
 from subprocess import check_output
 import json
 from dataclasses import dataclass
@@ -36,7 +35,12 @@ class FunctionSample:
     filePath: str = ""
     source: str = ""
 
-CodeSegment = namedtuple("CodeSegment", ["startAddr", "endAddr", "offset"])
+@dataclass
+class CodeSegment:
+    addrStart: int = 0
+    addrEnd: int = 0
+    sectionStart: int = 0
+    sectionEnd: int = 0
 
 samples = []
 allAddrData = {}
@@ -125,14 +129,40 @@ def findROMSymbol(romMap, addr):
     return findKeyEqualToOrLessThan(romMap[0], romMap[1], addr)
 
 
-def findCodeSegmentForGlobalAddr(globalAddr):
-    # TODO: support multiple segments
-    codeSegment = codeSegments[1]
-
-    if not (globalAddr >= codeSegment.startAddr and globalAddr < codeSegment.endAddr):
-        return None
+def readCodeSegments(binaryPath):
+    data = check_output([readelfPath, "--wide", "--sections", binaryPath])
+    sectionData = data.decode('utf-8')
     
-    return codeSegment
+    if len(codeSegments) == 1:
+        codeSectionEntries = re.findall(r"^\s+\[[ 0-9]+]\s+\.text\s+PROGBITS\s+([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+([0-9a-fA-F]+)",
+                                        sectionData, re.MULTILINE)
+        
+        if len(codeSectionEntries) == 0:
+            raise Exception("Did not find expected .text section in single-segment application")
+        
+        codeSections = {1: (".text", int(codeSectionEntries[0][0], 16), int(codeSectionEntries[0][1], 16))}
+    else:
+        codeSectionEntries = re.findall(r"^\s+\[[ 0-9]+]\s+(\.code(\d+))\s+PROGBITS\s+([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+([0-9a-fA-F]+)",
+                                        sectionData, re.MULTILINE)
+        codeSections = {int(entry[1]): (entry[0], int(entry[2], 16), int(entry[3], 16)) for entry in codeSectionEntries}
+    
+    if len(codeSections) != len(codeSegments):
+        raise Exception("Different number of code sections in binary and CODE segments in profile")
+    
+    for segmentId, (segmentName, offset, size) in codeSections.items():
+        if segmentId not in codeSegments:
+            raise Exception(f"Code section {segmentName} does not have corresponding CODE segment in profile")
+    
+        codeSegments[segmentId].sectionStart = offset
+        codeSegments[segmentId].sectionEnd = offset + size
+
+
+def findCodeSegmentForGlobalAddr(globalAddr):
+    for codeSegment in codeSegments.values():
+        if globalAddr >= codeSegment.addrStart and globalAddr < codeSegment.addrEnd:
+            return codeSegment
+    
+    return None
 
 
 def processSampleGlobalAddr(globalAddr):
@@ -157,7 +187,7 @@ def processSampleGlobalAddr(globalAddr):
         # Addr not in any code segment
         return False
 
-    addr = globalAddr - codeSegment.startAddr + codeSegment.offset
+    addr = globalAddr - codeSegment.addrStart + codeSegment.sectionStart
     allAddrData[globalAddr] = CodeAddrData(type='func', addr=addr, symbol=None, file=None, line=None)
     
     return True
@@ -402,15 +432,12 @@ def readProfile(profilePath):
         
         codeCount = readInt(f, 2)
         
-        if codeCount != 1:
-            raise Exception("Multi-segment apps not currently supported")
-        
         for i in range(codeCount):
             codeId = readInt(f, 2)
-            startAddr = readInt(f, 4)
-            endAddr = readInt(f, 4)
-            # print(f"Code segment: {startAddr:8x} - {endAddr:8x}")
-            codeSegments[codeId] = CodeSegment(startAddr, endAddr, 0)
+            addrStart = readInt(f, 4)
+            addrEnd = readInt(f, 4)
+            # print(f"Code segment {codeId}: {addrStart:8x} - {addrEnd:8x}")
+            codeSegments[codeId] = CodeSegment(addrStart, addrEnd, 0)
         
         # Obnoxious pattern for checking if we're at EOF:
         while f.read(1):
@@ -437,6 +464,7 @@ def process(profilePath, binaryPath):
     global allAddrData, samples
 
     rawSamples = readProfile(profilePath)
+    readCodeSegments(binaryPath)
     
     ignoredSamples = 0
     samples = []
@@ -586,8 +614,7 @@ def parseArgs():
     parser.add_argument("-r", "--rom-maps-dir", metavar="PATH",
                         help="Path to ROM maps directory (default: same directory as this script)")
     parser.add_argument("-t", "--retro68-toolchain",  metavar="PATH",
-                        help="Specify the path to Retro68's toolchain directory. "
-                        "(Not required when using --llvm-symbolizer)")
+                        help="Specify the path to Retro68's toolchain directory.")
     parser.add_argument("--llvm-symbolizer", action="store_true",
                         help=f"Use llvm-symbolizer for symbolication instead of Retro68's elftools, and optionally "
                         f"specify the path to llvm-symbolizer (defaulting to {defaultLLVMSymbolizerPath})")
@@ -619,12 +646,14 @@ def main():
     
     llvmSymbolizer = args.llvm_symbolizer
     
-    if llvmSymbolizer is None and args.retro68_toolchain is None:
-        sys.stderr.write("Error: need to specify either --retro68-toolchain or --llvm-symbolizer\n")
-        sys.exit(1)
-    
     if args.retro68_toolchain is not None:
         readelfPath = os.path.join(args.retro68_toolchain, "bin", "m68k-apple-macos-readelf")
+    elif "RETRO68_TOOLCHAIN" in os.environ:
+        readelfPath = os.path.join(os.environ["RETRO68_TOOLCHAIN"], "bin", "m68k-apple-macos-readelf")
+    else:
+        sys.stderr.write("Error: need to specify path to Retro68's toolchain directory, either using\n"
+                         "--retro68-toolchain or RETRO68_TOOLCHAIN environment variable\n")
+        sys.exit(1)
     
     functionNameMaxChars = args.function_max_chars
     filenameMaxChars = args.filename_max_chars
