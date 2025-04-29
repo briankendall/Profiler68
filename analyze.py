@@ -350,7 +350,7 @@ def determineFileAndLineNumbersUsingReadelf(binaryPath, addrsToProcess):
     
         lines = sourceData[path]
         
-        if lineNumber > len(lines):
+        if lineNumber <= 0 or lineNumber > len(lines):
             return ""
         else:
             return lines[lineNumber-1]
