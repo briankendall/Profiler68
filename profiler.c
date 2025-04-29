@@ -183,10 +183,7 @@ OSErr InitProfiler(int sizeWords, long samplesPerSecond)
     // (i.e. the start of the heap to A5)
     applZone = ApplicationZone();
     profilerAppHeapStart = (UInt32)&applZone->heapData;
-    asm volatile (
-        "move.l %%a5, %0 \n"
-        : "=d" (profilerAppHeapEnd)
-    );
+    profilerAppHeapEnd = SetCurrentA5();
     
     if (!CalculatePCOffset()) {
         return 30001;
