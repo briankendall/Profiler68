@@ -27,13 +27,26 @@ target_include_directories(TestPerf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/logging)
 target_link_libraries(TestPerf "-lm")
 target_link_libraries(TestPerf ${CMAKE_CURRENT_SOURCE_DIR}/logging/mini-vmac/libClipOut.a)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-stringop-overflow -Wno-stringop-overread -std=gnu90 \
--Werror=declaration-after-statement -Werror=pointer-sign -Wunused-variable -Werror=implicit-function-declaration \
--O0 -fno-inline -g -gdwarf-4 -ffixed-a6")
+set(PROJECT_COMPILE_OPTIONS
+    -std=gnu90
+    -Wno-stringop-overflow
+    -Wno-stringop-overread
+    -Werror=declaration-after-statement
+    -Werror=pointer-sign
+    -Wunused-variable
+    -Werror=implicit-function-declaration
+    -O0
+    -ffunction-sections
+    -fno-inline
+    # The following are needed for the profiler to work at all:
+    -g
+    -gdwarf-4
+    # The following are needed for stack traces to work:
+    -ffixed-a6
+    -fno-omit-frame-pointer
+)
+set_target_properties(TestPerf PROPERTIES COMPILE_OPTIONS "${PROJECT_COMPILE_OPTIONS}")
 
-# Enable -ffunction-sections and -gc-sections to make the app as small as possible
-# On 68K, also enable --mac-single to build it as a single-segment app (so that this code path doesn't rot)
-set_target_properties(TestPerf PROPERTIES COMPILE_OPTIONS -ffunction-sections)
 if(CMAKE_SYSTEM_NAME MATCHES Retro68)
     set_target_properties(TestPerf PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-single")
 

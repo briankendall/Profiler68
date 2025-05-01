@@ -12,8 +12,8 @@ Currently samples are written in sequence to a buffer in memory, so a lot of sam
 
 There are a few compiler flags you need to use for profiler builds:
 
-- `-g -gdwarf-4`: Enables debugging, so that the profiler's samples can be symbolicated.    
-- `-ffixed-a6`: This prevents the compiler from using the A6 register. This isn't strictly necessary, but not using this may result in the compiled code overwriting A6, which would prevent the profiler from being able to do a stack crawl while taking samples, producing bunk results.
+- `-g -gdwarf-4`: Enables debugging, so that the profiler's samples can be symbolicated.
+- `-ffixed-a6 -fno-omit-frame-pointer`: This ensures that each function call have a frame pointer and that register A6 is not overwritten, allowing the profiler to perform a stack crawl when taking samples. If you omit these then the stack traces it reports will not be accurate, though there is likely to be a performance cost to compiling with both of these.
 
 #### Sample output
 Here's what the output looks like when profiling TestPerf:
