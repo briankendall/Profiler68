@@ -160,6 +160,10 @@ static Boolean CalculatePCOffset()
     return true;
 }
 
+#ifdef __GNUC__
+__attribute__((optimize("no-omit-frame-pointer")))
+__attribute__ ((noinline))
+#endif
 OSErr InitProfiler(int sizeWords, long samplesPerSecond)
 {
     THz applZone;
@@ -169,8 +173,7 @@ OSErr InitProfiler(int sizeWords, long samplesPerSecond)
     // called in main, then the stack crawls will stop at whatever function
     // called the function that called InitProfiler.
     asm volatile (
-        "move.l %%a6, %%a0 \n"
-        "move.l (%%a0), %%a0 \n"
+        "move.l (%%a6), %%a0 \n"
         "move.l 4(%%a0), %0 \n"
         : "=d" (profilerStackCrawlStopAddr)
         :
