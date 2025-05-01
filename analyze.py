@@ -395,6 +395,7 @@ def addSampleToFunction(sample, symbol):
         functionSamples[symbol][key].count += 1
     else:
         s = FunctionSample()
+        s.count = 1
         s.line = addrData.line
         s.file = os.path.basename(addrData.file)[:filenameMaxChars]
         s.filePath = addrData.file
@@ -408,9 +409,10 @@ def countSamples():
         addrData = allAddrData[sample[0]]
         symbol = allAddrData[sample[0]].symbol
         exclusiveTally[symbol] = exclusiveTally.get(symbol, 0) + 1
+        inclusiveTally[symbol] = inclusiveTally.get(symbol, 0) + 1
         addSampleToFunction(sample[0], symbol)
         
-        for stackItem in sample:
+        for stackItem in sample[1:]:
             symbol = allAddrData[stackItem].symbol
             
             if symbol is None:
