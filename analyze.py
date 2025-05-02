@@ -573,13 +573,14 @@ def printResults():
 
 def writeSamplesAsJSON():
     fileAndLineData = {}
+    totalSampleCount = len(samples)
     
     for symbol, lineDict in functionSamples.items():
         funcSamples = sorted(lineDict.values(), key=lambda x: x.line)
-        totalSampleCount = sum([funcSample.count for funcSample in funcSamples])
+        # totalSampleCount = sum([funcSample.count for funcSample in funcSamples])
         
-        if totalSampleCount == 0:
-            continue
+        # if totalSampleCount == 0:
+        #     continue
         
         for funcSample in funcSamples:
             if funcSample.filePath not in fileAndLineData:
