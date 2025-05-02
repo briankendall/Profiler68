@@ -6,7 +6,8 @@ from pprint import pprint
 import bisect
 from subprocess import check_output
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections import Counter
 import argparse
 import json
 import re
@@ -16,6 +17,7 @@ readelfPath = None
 functionNameMaxChars = 32
 filenameMaxChars = 14
 romMapsDir = os.path.join(os.path.dirname(__file__), "ROM Maps")
+showAddrs = False
 
 @dataclass
 class CodeAddrData:
@@ -34,6 +36,7 @@ class FunctionSample:
     file: str = ""
     filePath: str = ""
     source: str = ""
+    addrs: Counter = field(default_factory=Counter)
 
 @dataclass
 class CodeSegment:
@@ -393,6 +396,7 @@ def addSampleToFunction(sample, symbol):
     
     if key in functionSamples[symbol]:
         functionSamples[symbol][key].count += 1
+        functionSamples[symbol][key].addrs[addrData.addr] += 1
     else:
         s = FunctionSample()
         s.count = 1
@@ -401,6 +405,7 @@ def addSampleToFunction(sample, symbol):
         s.filePath = addrData.file
         s.symbol = symbol
         s.source = addrData.source
+        s.addrs[addrData.addr] += 1
         functionSamples[symbol][key] = s
 
 
@@ -545,6 +550,9 @@ def printResults():
         for funcSample in funcSamples:
             percent = (funcSample.count * 10000 // totalSampleCount) / 100.0
             print(f"  count:{funcSample.count:6} {percent:6}%  {funcSample.file:>{filenameMaxChars}}  {funcSample.source.strip()}")
+
+            if showAddrs:
+                print("     " + ", ".join([f"{addr:x} x{count}" for addr, count in funcSample.addrs.items()]))
         
     print("")
     
@@ -629,6 +637,8 @@ def parseArgs():
                         type=int, metavar="COUNT",
                         default=filenameMaxChars,
                         help=f"Maximum number of characters in filenames (default: {filenameMaxChars})")
+    parser.add_argument("--show-sample-addrs", action="store_true",
+                        help="Show the actual code addresses for each sample in the 'functions and line' section")
     parser.add_argument("--samples-path",
                         default=None, metavar="PATH",
                         help=f"Write out samples as a json file")
@@ -643,7 +653,7 @@ def parseArgs():
 
 
 def main():
-    global romMapsDir, llvmSymbolizer, readelfPath, functionNameMaxChars, filenameMaxChars, samplesOutPath
+    global romMapsDir, llvmSymbolizer, readelfPath, functionNameMaxChars, filenameMaxChars, samplesOutPath, showAddrs
     
     args = parseArgs()
     
@@ -660,6 +670,7 @@ def main():
     
     functionNameMaxChars = args.function_max_chars
     filenameMaxChars = args.filename_max_chars
+    showAddrs = args.show_sample_addrs
     profilePath = args.profile_path
     binaryPath = args.binary_path
     
