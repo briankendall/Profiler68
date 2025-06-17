@@ -6,7 +6,7 @@ This repo includes a sample project, adapted from TestPerf from MPW 3.5, that de
 
 The profiler uses a timer to sample the currently executing instruction and then perform a stack crawl, and then saves all the samples to a file. You can then use the included Python script `analyze.py` to analyze the results and see where time is going. Run it with `--help` to see its arguments. It needs to know where Retro68's toolchain folder is, which you can specify either with its `-t` / `--retro68-toolchain` argument, or setting the `RETRO68_TOOLCHAIN` environment variable.
 
-Currently samples are written in sequence to a buffer in memory, so a lot of samples can fill the buffer up quickly. You specify the buffer size when calling `InitProfiler`, and be sure to make it big enough for your needs.
+Samples are written into a hash table using a block of memory provided at initialization, when calling `InitProfiler`. If the entire block of memory gets filled up then the profiler will stop, so be sure to give it enough memory.
 
 ### Usage notes:
 
@@ -265,5 +265,4 @@ All stack traces:
 #### Possible future work:
 
 - Make it so that this can be compiled with a classic Mac compiler like MPW, Think C, or CodeWarrior. That would mainly require rewriting the assembly code to fit their syntax.
-- Use a more intelligent way of storing samples in memory while the profiler is running, so that less memory is required. (Someone want to figure out how to implement a fast C hashmap that's safe to use at interrupt time? That means no memory allocations! 😱)
 - Make a PPC-compatible version

@@ -45,7 +45,8 @@ class CodeSegment:
     sectionStart: int = 0
     sectionEnd: int = 0
 
-samples = []
+samples = {}
+totalSampleCount = 0
 allAddrData = {}
 codeSegments = {}
 romBase = None
@@ -179,6 +180,10 @@ def processSampleGlobalAddr(globalAddr):
         
         romAddr = globalAddr - romBase
         symbol = findROMSymbol(romMap, romAddr)
+        
+        # We don't care about samples happening during a VBL interrupt
+        if symbol == "VBLINT":
+            return False
         
         allAddrData[globalAddr] = CodeAddrData(type='trap', addr=romAddr, symbol=symbol, file=None, line=None)
         
@@ -410,11 +415,11 @@ def addSampleToFunction(sample, symbol):
 
 
 def countSamples():
-    for sample in samples:
+    for sample, count in samples.items():
         addrData = allAddrData[sample[0]]
         symbol = allAddrData[sample[0]].symbol
-        exclusiveTally[symbol] = exclusiveTally.get(symbol, 0) + 1
-        inclusiveTally[symbol] = inclusiveTally.get(symbol, 0) + 1
+        exclusiveTally[symbol] = exclusiveTally.get(symbol, 0) + count
+        inclusiveTally[symbol] = inclusiveTally.get(symbol, 0) + count
         addSampleToFunction(sample[0], symbol)
         
         for stackItem in sample[1:]:
@@ -423,13 +428,13 @@ def countSamples():
             if symbol is None:
                 continue
             
-            inclusiveTally[symbol] = inclusiveTally.get(symbol, 0) + 1
+            inclusiveTally[symbol] = inclusiveTally.get(symbol, 0) + count
             addSampleToFunction(stackItem, symbol)
 
 
 def readProfile(profilePath):
     global codeSegments, romBase, romMap
-    rawSamples = []
+    rawSamples = {}
     
     with open(profilePath, "rb") as f:
         model = readPStr(f)
@@ -450,7 +455,7 @@ def readProfile(profilePath):
         while f.read(1):
             f.seek(-1, 1)
             
-            sampleSize = readInt(f, 2)
+            sampleSize = readInt(f, 2) // 4
             sample = []
             
             for i in range(sampleSize):
@@ -458,7 +463,9 @@ def readProfile(profilePath):
                 val -= 2 # account for this being the return addr, not the addr being executed
                 sample.append(val)
             
-            rawSamples.append(tuple(sample))
+            count = readInt(f, 4)
+            
+            rawSamples[tuple(sample)] = count
     
     return rawSamples
 
@@ -468,15 +475,15 @@ def sampleHasValidSymbols(sample):
 
 
 def process(profilePath, binaryPath):
-    global allAddrData, samples
+    global allAddrData, samples, totalSampleCount
 
     rawSamples = readProfile(profilePath)
     readCodeSegments(binaryPath)
     
     ignoredSamples = 0
-    samples = []
+    samples = {}
     
-    for sample in rawSamples:
+    for sample, count in rawSamples.items():
         usable = len(sample) > 0
         
         for i, globalAddr in enumerate(sample):
@@ -485,13 +492,16 @@ def process(profilePath, binaryPath):
                 break
         
         if usable:
-            samples.append(sample)
+            if sample in samples:
+                raise Exception("OH NOOOO!")
+            samples[sample] = count
         else:
-            ignoredSamples += 1
+            ignoredSamples += count
 
     addrsToProcess = [key for key, val in allAddrData.items() if val.type == 'func']
 
-    print("Total samples: ", len(rawSamples))
+    rawSampleCount = sum(rawSamples.values())
+    print("Total samples in profile: ", rawSampleCount)
     print("")
     
     if llvmSymbolizer is not None:
@@ -499,9 +509,11 @@ def process(profilePath, binaryPath):
     else:
         determineFileAndLineNumbersUsingReadelf(binaryPath, addrsToProcess)
     
-    samples = list(filter(sampleHasValidSymbols, samples))
-    print("Usable samples: ", len(samples))
-    print("Unusable samples: ", len(rawSamples) - len(samples))
+    samples = {sample: count for sample, count in samples.items() if sampleHasValidSymbols(sample)}
+    totalSampleCount = sum(samples.values())
+    
+    print("Usable samples: ", totalSampleCount)
+    print("Unusable samples: ", rawSampleCount - totalSampleCount)
     
     countSamples()
     
@@ -513,7 +525,7 @@ def process(profilePath, binaryPath):
 
 def printResults():
     def printSymbol(symbol, count):
-        percent = ((count * 10000) // len(samples)) / 100.0
+        percent = ((count * 10000) // totalSampleCount) / 100.0
         print(f"    {symbol[:functionNameMaxChars]:{functionNameMaxChars}} - {count:8}   {percent:6}%")
     
     print("--------------------------------------------")
@@ -540,15 +552,15 @@ def printResults():
     
     for symbol, lineDict in functionSamples.items():
         funcSamples = sorted(lineDict.values(), key=lambda x: x.line)
-        totalSampleCount = sum([funcSample.count for funcSample in funcSamples])
+        funcSampleTotalCount = sum([funcSample.count for funcSample in funcSamples])
         
-        if totalSampleCount == 0:
+        if funcSampleTotalCount == 0:
             continue
         
         print(f"\n=== {symbol + ' ':=<40}")
         
         for funcSample in funcSamples:
-            percent = (funcSample.count * 10000 // totalSampleCount) / 100.0
+            percent = (funcSample.count * 10000 // funcSampleTotalCount) / 100.0
             print(f"  count:{funcSample.count:6} {percent:6}%  {funcSample.file:>{filenameMaxChars}}  {funcSample.source.strip()}")
 
             if showAddrs:
@@ -562,18 +574,19 @@ def printResults():
     
     stackTraces = {}
     
-    for sample in samples:
+    for sample, count in samples.items():
         sampleSymbols = tuple(reversed([allAddrData[globalAddr].symbol for globalAddr in sample]))
         
         if sampleSymbols not in stackTraces:
-            stackTraces[sampleSymbols] = 1
+            stackTraces[sampleSymbols] = count
         else:
-            stackTraces[sampleSymbols] += 1
+            stackTraces[sampleSymbols] += count
     
     sortedStackTraces = sorted([(count, sampleSymbols) for sampleSymbols, count in stackTraces.items()], reverse=True)
     
     for count, sampleSymbols in sortedStackTraces:
-        print(f"\n({count} times:)")
+        percent = (count * 10000 // totalSampleCount) / 100.0
+        print(f"\n({count} times / {percent:6}%)")
         for i, sampleSymbol in enumerate(sampleSymbols):
             spaces = ' ' * (i+1) * 2
             print(f"{spaces}{sampleSymbol}")
@@ -581,14 +594,9 @@ def printResults():
 
 def writeSamplesAsJSON():
     fileAndLineData = {}
-    totalSampleCount = len(samples)
     
     for symbol, lineDict in functionSamples.items():
         funcSamples = sorted(lineDict.values(), key=lambda x: x.line)
-        # totalSampleCount = sum([funcSample.count for funcSample in funcSamples])
-        
-        # if totalSampleCount == 0:
-        #     continue
         
         for funcSample in funcSamples:
             if funcSample.filePath not in fileAndLineData:

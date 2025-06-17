@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "hashmap.h"
+
 #ifdef LOGGING_AVAILABLE
     #include "logging.h"
 #else
@@ -21,9 +23,8 @@ extern TMTask profilerTimerTask;
 extern UInt32 profilerAppHeapStart;
 extern UInt32 profilerAppHeapEnd;
 
-static UInt16 *sampleData = NULL;
-static UInt16 *currentSample = NULL;
-static UInt32 sampleDataSizeWords = 0;
+static Ptr sampleData = NULL;
+static HashTable samples;
 static UInt32 sampleCount = 0;
 static UInt32 badSampleCount = 0;
 static TimerUPP timerUPP = NULL;
@@ -64,18 +65,19 @@ static void AppendPString(Str255 dst, const Str255 src)
 
 void ProfilerTimerFunction(UInt8 *stackPointer)
 {
-    UInt32 returnAddr0;
-    UInt16 count = 0;
+    UInt16 callStackSize = 0;
+    UInt32 callStack[50], *sampleHits;
+    HashtableStatus hashError;
     
     if (!timerEnabled) {
         return;
     }
     
-    returnAddr0 = *(UInt32 *)(stackPointer + profilerPCOffset);
+    callStack[0] = *(UInt32 *)(stackPointer + profilerPCOffset);
     
-    if (returnAddr0 >= profilerAppHeapStart) {
-        *(UInt32 *)(currentSample + 1) = returnAddr0;
-        ProfilerStackCrawl((UInt32 *)(currentSample + 3), &count, (UInt32 *)(sampleData + sampleDataSizeWords - 1), &errorCode);
+    if (callStack[0] >= profilerAppHeapStart) {
+        ProfilerStackCrawl((UInt32 *)(callStack + 1), &callStackSize, (UInt32 *)(callStack + 50), &errorCode);
+        callStackSize++;
     } else {
         errorCode = 3;
     }
@@ -99,10 +101,16 @@ void ProfilerTimerFunction(UInt8 *stackPointer)
         return;
     }
     
-    ++count;
-    *currentSample = count;
-    currentSample += 1 + count * 2;
-    ++sampleCount;
+    hashError = hashtableInsertOrLookup(&samples, (UInt8 *)callStack, callStackSize * sizeof(UInt32), &sampleHits);
+    
+    if (hashError < 0) {
+        // Ran out of buffer for samples, don't continue the timer
+        errorCode = 1;
+        return;
+    }
+    
+    (*sampleHits)++;
+    sampleCount++;
     
     PrimeTime((QElemPtr)&profilerTimerTask, -timerUSec);
 }
@@ -164,7 +172,7 @@ static Boolean CalculatePCOffset()
 __attribute__((optimize("no-omit-frame-pointer")))
 __attribute__ ((noinline))
 #endif
-OSErr InitProfiler(int sizeWords, long samplesPerSecond)
+OSErr InitProfiler(int sizeBytes, long samplesPerSecond)
 {
     THz applZone;
     
@@ -192,16 +200,15 @@ OSErr InitProfiler(int sizeWords, long samplesPerSecond)
         return 30001;
     }
     
-    sampleDataSizeWords = sizeWords;
-    sampleData = (UInt16 *)NewPtr(sampleDataSizeWords * 2);
+    sampleData = NewPtr(sizeBytes);
     
     if (!sampleData) {
         printLog("Error: failed to allocate profiler sample buffer");
         return MemError();
     }
     
-    currentSample = sampleData;
-    sampleCount = 0;
+    hashtableInit(&samples, sampleData, sizeBytes, 128);
+    
     badSampleCount = 0;
     errorCode = 0;
     
@@ -243,7 +250,7 @@ void StopProfiler()
     
     switch(errorCode) {
         case 1:
-            printLog("Error: profiler sample data was filled up. Only captured %d samples.", sampleCount);
+            printLog("Error: profiler sample data was filled up. Captured %d samples.", sampleCount);
             break;
         default:
             printLog("Profiler captured %d samples.", sampleCount);
@@ -317,7 +324,20 @@ OSErr SaveProfilingData_(FILE *f)
         fwrite(&endAddr, sizeof(UInt32), 1, f);
     }
     
-    fwrite(sampleData, sizeof(UInt16), currentSample - sampleData, f);
+    {
+        HashtableIterator it;
+        const UInt8 *sample;
+        UInt16 sampleLength;
+        UInt32 *count;
+        
+        hashtableIterInit(&it);
+        
+        while(hashtableIterNext(&samples, &it, &sample, &sampleLength, &count)) {
+            fwrite(&sampleLength, sizeof(UInt16), 1, f);
+            fwrite(sample, 1, sampleLength, f);
+            fwrite(count, sizeof(UInt32), 1, f);
+        }
+    }
     
     return noErr;
 }
