@@ -388,7 +388,7 @@ def determineFileAndLineNumbersUsingReadelf(binaryPath, addrsToProcess):
             addrData.source = None
 
 
-def addSampleToFunction(sample, symbol):
+def addSampleToFunction(sample, count, symbol):
     addrData = allAddrData[sample]
     
     if addrData.type == 'trap' or addrData.file is None or addrData.line is None:
@@ -400,17 +400,17 @@ def addSampleToFunction(sample, symbol):
     key = (addrData.file, addrData.line)
     
     if key in functionSamples[symbol]:
-        functionSamples[symbol][key].count += 1
-        functionSamples[symbol][key].addrs[addrData.addr] += 1
+        functionSamples[symbol][key].count += count
+        functionSamples[symbol][key].addrs[addrData.addr] += count
     else:
         s = FunctionSample()
-        s.count = 1
+        s.count = count
         s.line = addrData.line
         s.file = os.path.basename(addrData.file)[:filenameMaxChars]
         s.filePath = addrData.file
         s.symbol = symbol
         s.source = addrData.source
-        s.addrs[addrData.addr] += 1
+        s.addrs[addrData.addr] = count
         functionSamples[symbol][key] = s
 
 
@@ -420,7 +420,7 @@ def countSamples():
         symbol = allAddrData[sample[0]].symbol
         exclusiveTally[symbol] = exclusiveTally.get(symbol, 0) + count
         inclusiveTally[symbol] = inclusiveTally.get(symbol, 0) + count
-        addSampleToFunction(sample[0], symbol)
+        addSampleToFunction(sample[0], count, symbol)
         
         for stackItem in sample[1:]:
             symbol = allAddrData[stackItem].symbol
@@ -429,7 +429,7 @@ def countSamples():
                 continue
             
             inclusiveTally[symbol] = inclusiveTally.get(symbol, 0) + count
-            addSampleToFunction(stackItem, symbol)
+            addSampleToFunction(stackItem, count, symbol)
 
 
 def readProfile(profilePath):
@@ -595,17 +595,25 @@ def printResults():
 def writeSamplesAsJSON():
     fileAndLineData = {}
     
-    for symbol, lineDict in functionSamples.items():
-        funcSamples = sorted(lineDict.values(), key=lambda x: x.line)
-        
-        for funcSample in funcSamples:
-            if funcSample.filePath not in fileAndLineData:
-                fileAndLineData[funcSample.filePath] = {}
+    for sample, count in samples.items():
+        for i, addr in enumerate(sample):
+            addrData = allAddrData[addr]
             
-            percent = (funcSample.count * 10000 // totalSampleCount) / 100.0
+            if addrData.type != "func" or addrData.file is None or addrData.line is None:
+                continue
             
-            fileAndLineData[funcSample.filePath][funcSample.line] = {"count": funcSample.count, "percent": percent}        
-
+            if addrData.file not in fileAndLineData:
+                fileAndLineData[addrData.file] = {}
+            
+            if addrData.line not in fileAndLineData[addrData.file]:
+                fileAndLineData[addrData.file][addrData.line] = {"count": 0, "exclusiveCount": 0, "percent": 0}
+            
+            if i == 0:
+                fileAndLineData[addrData.file][addrData.line]["exclusiveCount"] += count
+            
+            fileAndLineData[addrData.file][addrData.line]["count"] += count
+            fileAndLineData[addrData.file][addrData.line]["percent"] = (fileAndLineData[addrData.file][addrData.line]["count"] * 1000 // totalSampleCount) / 10.0
+    
     with open(samplesOutPath, "w") as f:
         f.write(json.dumps(fileAndLineData))
         
